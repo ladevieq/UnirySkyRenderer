@@ -12,9 +12,6 @@ public class HilaireSkySettings : SkySettings
 {
     const int NEW_SKY_UNIQUE_ID = 20382390;
 
-    [Tooltip("Specify the cubemap HDRP uses to render the sky.")]
-    public CubemapParameter hdriSky = new CubemapParameter(null);
-
     public override Type GetSkyRendererType()
     {
         return typeof(HilaireSkyRenderer);
@@ -23,10 +20,10 @@ public class HilaireSkySettings : SkySettings
     public override int GetHashCode()
     {
         int hash = base.GetHashCode();
-        unchecked
-        {
-            hash = hdriSky.value != null ? hash * 23 + hdriSky.GetHashCode() : hash;
-        }
+        // unchecked
+        // {
+        //     hash = hdriSky.value != null ? hash * 23 + hdriSky.GetHashCode() : hash;
+        // }
         return hash;
     }
 

@@ -1,0 +1,111 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> Result;
+
+static float3 mieScattering = float3(0.003996, 0.003996, 0.003996);
+static float3 mieAbsorption = float3(0.0044, 0.0044, 0.0044);
+
+static float3 rayleighScattering = float3(0.005802, 0.013558, 0.0331);
+
+static float groundRadius = 6360.0;
+static float atmosphereRadius = 6460.0;
+
+float mieDensityDistribution(float h) {
+    return exp(-h / 1.2);
+}
+
+float rayleighDensityDistribution(float h) {
+    return exp(-h / 8.0);
+}
+
+// Consider the sphere center to be (0, 0, 0)
+float hitSphere(float3 origin, float3 direction, float radius) {
+    float b = dot(origin, direction);
+    float c = dot(origin, origin) - radius * radius;
+    float h = b * b - c;
+
+    if (h < 0) return -1; // no intersection
+
+    h = sqrt(h);
+
+    float sol0 = -b-h;
+    float sol1 = -b+h;
+
+    if (sol0 < 0 && sol1 < 0) return -1;
+
+    if (sol0 < 0.0)
+    {
+            return max(0.0, sol1);
+    }
+    else if (sol1 < 0.0)
+    {
+            return max(0.0, sol0);
+    }
+    return max(0.0, min(sol0, sol1));
+}
+
+// Trace a ray that either hit the groud or the atmospheres bound
+float TraceAtmosphereRay(float3 origin, float3 direction) {
+    float tTop = hitSphere(origin, direction, atmosphereRadius);
+    float tBottom = hitSphere(origin, direction, groundRadius);
+
+    if (tBottom < 0.0) {
+        if (tTop < 0.0)
+            return -1;
+        return tTop;
+    } else {
+        if (tTop > 0.0)
+            return min(tBottom, tTop);
+        return tBottom;
+    }
+}
+
+void rMuFromUV(float2 uv, out float r, out float mu) {
+    float H = sqrt(atmosphereRadius * atmosphereRadius - groundRadius * groundRadius);
+    float rho = H * uv.y;
+    r = sqrt(rho * rho + groundRadius *  groundRadius);
+
+    float d_min = atmosphereRadius - r;
+    float d_max = rho + H;
+    float d = d_min + uv.x * (d_max - d_min);
+    mu = d == 0.0 ? 1.0 : (H * H - rho * rho - d * d) / (2.0 * r * d);
+    mu = clamp(mu, -1, 1);
+}
+
+static const uint sampleCount = 500;
+static const uint2 LUTSize = uint2(256, 64);
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    float2 uv = float2(id.xy) / LUTSize;
+    uv = (0.5 / LUTSize) + uv * (1.0 - 1.0 / LUTSize);
+    float r, mu;
+    rMuFromUV(uv, r, mu);
+
+    // Building the ray
+    float3 origin = float3(0, 0, r);
+    float3 direction = float3(0, sqrt(1. - mu * mu), mu);
+
+    float rayLength = TraceAtmosphereRay(origin, direction);
+    float3 t = float3(0.0, 0.0, 0.0);
+    if (rayLength > 0) {
+        float dx = rayLength / sampleCount;
+
+        // Split the ray in n sections
+        for (uint i = 0; i < sampleCount; i++) {
+            float3 p = origin + float(i) * dx * direction;
+            float h = length(p) - groundRadius;
+
+            // Compute transmittance
+            t += (-rayleighScattering            * rayleighDensityDistribution(h)
+              +   mieScattering + mieAbsorption  * mieDensityDistribution(h))
+              * dx;
+        }
+    }
+
+    Result[id.xy] = float4(exp(-t), 1.0);
+}
