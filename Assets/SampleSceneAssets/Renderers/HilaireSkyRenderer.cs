@@ -7,45 +7,57 @@ using UnityEngine.Experimental.Rendering;
 
 class HilaireSkyRenderer : SkyRenderer
 {
-    RTHandle transmitanceLUT;
-    string transmittanceLUTPath = "Assets/transmittance.exr";
+    string LUTsExportPath = "Assets/LUTs";
+    string ShadersPath = "Assets/SampleSceneAssets/Shaders";
+
+    RTHandle transmittanceLUT;
+    RTHandle skyviewLUT;
 
     private ProfilingSampler transmittancePS = new ProfilingSampler("Compute Transmittance");
 
 
-    readonly Vector2Int transmitanceLUTSize = new Vector2Int(256, 64);
+    readonly Vector2Int transmittanceLUTSize = new Vector2Int(256, 64);
+    readonly Vector2Int skyviewLUTSize = new Vector2Int(256, 64);
 
-    GraphicsFormat s_ColorFormat = GraphicsFormat.R32G32B32A32_SFloat;
+    GraphicsFormat colorFormat = GraphicsFormat.R32G32B32A32_SFloat;
 
-    ComputeShader s_TransmittancePrecomputationCS;
+    ComputeShader transmittancePrecomputationCS;
+    ComputeShader skyviewPrecomputationCS;
 
     public bool UpdateLUTs = true;
 
-    // Material m_NewSkyMaterial; // Renders a cubemap into a render texture (can be cube or 2D)
-    // MaterialPropertyBlock m_PropertyBlock = new MaterialPropertyBlock();
-
-    // private static int m_RenderCubemapID = 0; // FragBaking
-    // private static int m_RenderFullscreenSkyID = 1; // FragRender
     private void AllocateTransmittanceTable()
     {
-        transmitanceLUT = RTHandles.Alloc(transmitanceLUTSize.x, transmitanceLUTSize.y,
-            colorFormat: s_ColorFormat,
+        transmittanceLUT = RTHandles.Alloc(transmittanceLUTSize.x, transmittanceLUTSize.y,
+            colorFormat: colorFormat,
             enableRandomWrite: true,
             name: "TransmittanceTable");
 
-        Debug.Assert(transmitanceLUT != null);
+        Debug.Assert(transmittanceLUT != null);
+    }
+
+    private void AllocateSkyViewTable()
+    {
+        skyviewLUT = RTHandles.Alloc(transmittanceLUTSize.x, transmittanceLUTSize.y,
+            colorFormat: colorFormat,
+            enableRandomWrite: true,
+            name: "SkyviewTable");
+
+        Debug.Assert(skyviewLUT != null);
     }
 
     public override void Build()
     {
         AllocateTransmittanceTable();
+        AllocateSkyViewTable();
 
-        s_TransmittancePrecomputationCS = (ComputeShader)AssetDatabase.LoadAssetAtPath<ComputeShader>("Assets/SampleSceneAssets/Shaders/TransmittancePrecompute.compute");
+        transmittancePrecomputationCS = (ComputeShader)AssetDatabase.LoadAssetAtPath<ComputeShader>(Path.Combine(ShadersPath, "TransmittancePrecompute.compute"));
+        skyviewPrecomputationCS = (ComputeShader)AssetDatabase.LoadAssetAtPath<ComputeShader>(Path.Combine(ShadersPath, "SkyviewPrecompute.compute"));
     }
 
     public override void Cleanup()
     {
-        throw new System.NotImplementedException();
+        // throw new System.NotImplementedException();
     }
 
     // Project dependent way to retrieve a shader.
@@ -65,13 +77,13 @@ class HilaireSkyRenderer : SkyRenderer
         var cmd = builtinParams.commandBuffer;
         using (new ProfilingScope(cmd, transmittancePS))
         {
-            cmd.SetComputeTextureParam(s_TransmittancePrecomputationCS, 0, Shader.PropertyToID("Result"), transmitanceLUT);
+            cmd.SetComputeTextureParam(transmittancePrecomputationCS, 0, Shader.PropertyToID("Result"), transmittanceLUT);
 
             cmd.DispatchCompute(
-                s_TransmittancePrecomputationCS,
-                s_TransmittancePrecomputationCS.FindKernel("CSMain"),
-                transmitanceLUTSize.x / 8,
-                transmitanceLUTSize.y / 8,
+                transmittancePrecomputationCS,
+                transmittancePrecomputationCS.FindKernel("CSMain"),
+                transmittanceLUTSize.x / 8,
+                transmittanceLUTSize.y / 8,
                 1
             );
         }
@@ -98,30 +110,33 @@ class HilaireSkyRenderer : SkyRenderer
         // }
     }
 
-    // TODO: Access sky renderer in order to make this static
-    public void ExportLUTs()
+    private void ExportLUTs()
     {
-        if (AssetDatabase.LoadAssetAtPath<Texture>(transmittanceLUTPath))
-        {
-            return;
-        }
-        var transmitanceRT = transmitanceLUT.rt;
-        Texture2D tex = new Texture2D(transmitanceRT.width, transmitanceRT.height, TextureFormat.RGBAFloat, false);
-        var old_rt = RenderTexture.active;
-        RenderTexture.active = transmitanceRT;
+        ExportLUT(transmittanceLUT.rt);
+        ExportLUT(skyviewLUT.rt);
+    }
 
-        tex.ReadPixels(new Rect(0, 0, transmitanceRT.width, transmitanceRT.height), 0, 0);
+    private void ExportLUT(RenderTexture rt)
+    {
+        var path = Path.Combine(LUTsExportPath, rt.name + ".exr");
+        if (AssetDatabase.LoadAssetAtPath<Texture>(path))
+            return;
+
+        Texture2D tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBAFloat, false);
+        var old_rt = RenderTexture.active;
+        RenderTexture.active = rt;
+
+        tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
         tex.Apply();
 
         var bytes = ImageConversion.EncodeToEXR(tex);
+
+        File.WriteAllBytes(path, bytes);
+
         Object.DestroyImmediate(tex);
 
-        File.WriteAllBytes(transmittanceLUTPath, bytes);
+        AssetDatabase.ImportAsset(path);
 
-        Texture exr = AssetDatabase.LoadAssetAtPath<Texture>(transmittanceLUTPath);
-        AssetDatabase.Refresh();
-        EditorUtility.SetDirty(exr);
-        AssetDatabase.ImportAsset(transmittanceLUTPath);
         RenderTexture.active = old_rt;
     }
 }
