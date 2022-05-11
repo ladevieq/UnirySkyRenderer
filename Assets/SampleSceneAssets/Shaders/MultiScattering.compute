@@ -1,0 +1,77 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> Result;
+
+RWTexture2D<float4> Transmittance;
+
+static uint2 TexSize = uint2(32, 32);
+static float PlanetRadius = 6360.0;
+static float AtmosphereRadius = 6460.0;
+
+// Consider the sphere center to be (0, 0, 0)
+float hitSphere(float3 origin, float3 direction, float radius) {
+    float b = dot(origin, direction);
+    float c = dot(origin, origin) - radius * radius;
+    float h = b * b - c;
+
+    if (h < 0) return -1; // no intersection
+
+    h = sqrt(h);
+
+    float sol0 = -b-h;
+    float sol1 = -b+h;
+
+    if (sol0 < 0 && sol1 < 0) return -1;
+
+    if (sol0 < 0.0)
+    {
+            return max(0.0, sol1);
+    }
+    else if (sol1 < 0.0)
+    {
+            return max(0.0, sol0);
+    }
+    return max(0.0, min(sol0, sol1));
+}
+
+// Trace a ray that either hit the groud or the atmospheres bound
+float TraceAtmosphereRay(float3 origin, float3 direction) {
+    float tTop = hitSphere(origin, direction, AtmosphereRadius);
+    float tBottom = hitSphere(origin, direction, PlanetRadius);
+
+    if (tBottom < 0.0) {
+        if (tTop < 0.0)
+            return -1;
+        return tTop;
+    } else {
+        if (tTop > 0.0)
+            return min(tBottom, tTop);
+        return tBottom;
+    }
+}
+
+// L0
+float DirectLight() {
+
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    float2 uv = float2(id.xy) / TexSize;
+    uv = (0.5 / TexSize) + uv * (1.0 - 1.0 / TexSize);
+
+    const float cosSunZenithAngle = uv.x * 2.0 - 1.0;
+    const float altitude = PlanetRadius + uv.y * (AtmosphereRadius - PlanetRadius);
+    const float3 origin = float3(0, 0, altitude);
+    const float3 sunDir = float3(0, sqrt(1 - cosSunZenithAngle * cosSunZenithAngle), cosSunZenithAngle);
+    const float3 viewDir = float3(0, sqrt(1 - cosSunZenithAngle * cosSunZenithAngle), cosSunZenithAngle);
+    const float3 L0 = dot(sunDir, viewDir) >= 0.999 ? DirectLight() : float3(0, 0, 0);
+
+    float rayLength = TraceAtmosphereRay(origin, sunDir);
+
+    Result[id.xy] = float4(cosSunZenithAngle, altitude, 0, 1.0);
+}
